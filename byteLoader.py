@@ -15,29 +15,43 @@ if __name__ == "__main__":
 	exit( 0 )
 
 
-states = Enum( 'states', 'RESET REQ_IDENT WAIT_IDENT_RESP SET_ADDR SEND_DATA ERROR EXIT' )
+states = Enum(
+	'states',
+	'RESET REQ_IDENT \
+	WAIT_IDENT_RESP \
+	SET_ADDR \
+	SEND_DATA \
+	ERROR \
+	EXIT'
+)
 
 
 
 class ByteLoader( ):
 	def __init__( self, canBus ):
+		# bus
 		self.canBus = canBus
 		self.canId = 0x133707FF
-		self.fileData = []
-		self.state = states.RESET
 
+		# protocol
+		self.state = states.RESET
 		self.boardId = 0xFF
 		self.msgNumber = 0
 		self.fMsgCounter = 0
 		self.pageSize = 0
 		self.pageCount = 0
-	# end init
+
+		# flashing
+		self.flashPage = 0
+		self.bufferPosition = 0
+		self.fileData = []
+	# end __init__()
 
 
 	def importHexFile( self, fileName ):
 		with open( fileName, 'rb' ) as f:
 			self.fileData = f.read( )
-	# end importHexFile
+	# end importHexFile()
 
 
 
@@ -63,7 +77,6 @@ class ByteLoader( ):
 
 			elif self.state == states.REQ_IDENT:
 				print( 'state[REQ_IDENT]' )
-				print( '    msgNumber =', self.msgNumber )
 
 				ok = self.__requestIdentify( )
 				if ok is False:
@@ -87,9 +100,23 @@ class ByteLoader( ):
 				# waiting here might take a while.
 				# The device might not be powered already
 				print( '' )
-				self.state = states.EXIT
+				self.state = states.SET_ADDR
 				continue
 			# end STATE RESET
+
+			if self.state == states.SET_ADDR:
+				print ( 'state[SET_ADDR]' )
+
+				ok = self.__setAddr( )
+				if not ok:
+					print( 'ERROR: cannot set address' )
+					return 3
+
+
+				print( '' )
+				self.state = states.EXIT
+				continue
+			# end STATE SET ADDRESS
 
 
 			if self.state == states.EXIT:
@@ -97,11 +124,12 @@ class ByteLoader( ):
 				return False
 			# end STATE EXIT
 
+
 			else:
 				self.state = states.EXIT
-			# end STOTE UNKNOWN
+			# end STATE UNKNOWN
 		# end mainLoop
-	# end run
+	# end run()
 
 
 
@@ -115,9 +143,13 @@ class ByteLoader( ):
 		data.append( 0x80 ) # SOB = 1, Following Msg Count = 0
 		txMsg.setData( data )
 
-		print( '    boardId=%d' % self.boardId )
-		print( '    msgNum=%d' % self.msgNumber )
+		print( '    data: boardId = 0x%02x' % self.boardId )
+		print( '    data: msgType = 0x%02x' % (0x00|0x02) )
+		print( '    data: msgNum =', self.msgNumber )
+		print( '    data: SOB=%d, fMsgCount=%d' % (1, 0) )
 		print( '' )
+
+		self.msgNumber = self.msgNumber + 1
 
 		ok = txMsg.send( )
 		if ok == True:
@@ -125,7 +157,7 @@ class ByteLoader( ):
 			return False
 		else:
 			return True
-	# end __requestIdentify
+	# end __requestIdentify()
 
 
 
@@ -143,7 +175,7 @@ class ByteLoader( ):
 				continue # not a bootloader message
 
 			if self.boardId != rxMsg.data[0]:
-				print( '    ERROR: bootloader version does not match' )
+				print( '    ERROR: boardId does not match' )
 				print( '    Expected: %d, got: %d' % (self.boardId, rxMsg.data[0]))
 				return False
 
@@ -159,14 +191,51 @@ class ByteLoader( ):
 				self.pageSize = 0 # invalid
 
 			self.pageCount = (rxMsg.data[6] << 8) + rxMsg.data[7]
-			print( '    data: bootloader =',        rxMsg.data[0] )
+			print( '    data: boardId = 0x%02x' % rxMsg.data[0] )
+			print( '    data: msgType/Command = 0x%02x' % rxMsg.data[1] )
 			print( '    data: bootloaderVersion =', rxMsg.data[4] & 0x0F )
-			print( '    data: pageSize =',          self.pageSize )
-			print( '    data: rwwPageCount =',      self.pageCount )
+			print( '    data: pageSize =', self.pageSize )
+			print( '    data: rwwPageCount =', self.pageCount )
 
 			return True
 		# while True
 	# __receiveIdentify()
+
+
+	def __setAddr( self ):
+		txMsg = CanMsg( self.canBus, self.canId, True )
+		print( '    > sending: Request SET ADDR command' )
+		data = bytearray( )
+		data.append( self.boardId ) # Board-ID
+		data.append( 0x00|0x02 ) # Type = Request, Command = Set Address
+		data.append( self.msgNumber ) # iterates to spot missing messages
+		data.append( 0x80 ) # SOB = 1, Following Msg Count = 0
+
+		data.append( 0x00 ) # start at the 1st flash page
+		data.append( 0x00 )
+
+		data.append( 0x00 ) # beginning of the page
+		data.append( 0x00 )
+		txMsg.setData( data )
+
+		self.msgNumber = self.msgNumber + 1
+
+		print( '    data: boardId = 0x%02x' % self.boardId )
+		print( '    data: msgType = 0x%02x' % (0x00|0x02) )
+		print( '    data: SOB=%d, fMsgCount=%d' % (1, 0) )
+		print( '    data: flashPage =', self.flashPage )
+		print( '    data: pageBufferPosition =', self.bufferPosition )
+		print( '' )
+
+		ok = txMsg.send( )
+		if ok == True:
+			print( 'ERROR: Cannot send msg' )
+			return False
+		else:
+			return True
+	# end __setAddr()
+
+
 
 
 
