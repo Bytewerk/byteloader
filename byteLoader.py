@@ -78,7 +78,6 @@ class ByteLoader( ):
 
 			if self.state == states.WAIT_IDENT_RESP:
 				print( 'state[WAIT_IDENT_RESP]' )
-				print( '' )
 
 				ok = self.__receiveIdentify( )
 				if ok is False:
@@ -86,8 +85,8 @@ class ByteLoader( ):
 					return 2
 
 				# waiting here might take a while.
-				# The device might not be powered on already
-
+				# The device might not be powered already
+				print( '' )
 				self.state = states.EXIT
 				continue
 			# end STATE RESET
@@ -148,20 +147,26 @@ class ByteLoader( ):
 				print( '    Expected: %d, got: %d' % (self.boardId, rxMsg.data[0]))
 				return False
 
-			self.pageSize = rxMsg.data[2]
-			self.pageCount = rxMsg.data[3]
+			if rxMsg.data[2] == 0:
+				self.pageSize = 32 # byte
+			elif rxMsg.data[2] == 1:
+				self.pageSize = 64 # byte
+			elif rxMsg.data[2] == 2:
+				self.pageSize = 128 # byte
+			elif rxMsg.data[2] == 3:
+				self.pageSize = 256 # byte
+			else:
+				self.pageSize = 0 # invalid
+
+			self.pageCount = (rxMsg.data[6] << 8) + rxMsg.data[7]
 			print( '    data: bootloader =',        rxMsg.data[0] )
-			print( '    data: bootloaderVersion =', rxMsg.data[1] )
-			print( '    data: pageSize =',          rxMsg.data[2] )
-			print( '    data: rwwPageCount =',      rxMsg.data[3] )
+			print( '    data: bootloaderVersion =', rxMsg.data[4] & 0x0F )
+			print( '    data: pageSize =',          self.pageSize )
+			print( '    data: rwwPageCount =',      self.pageCount )
 
 			return True
 		# while True
-
-
-
-
-
+	# __receiveIdentify()
 
 
 
