@@ -52,7 +52,13 @@ class CanBus():
 		try:
 			data, uselessMetaInfo = self.socket.recvfrom( 1024 )
 		except socket.timeout:
+			print( 'ERROR: Socket timeout' )
 			return None
+
+		except BlockingIOError:
+			print( 'ERROR: Blocking IO Error' )
+			return False
+
 
 		disected = self.__dissectFrame(data)
 		msg = CanMsg( self, disected[0], disected[1])

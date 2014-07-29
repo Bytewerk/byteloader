@@ -20,6 +20,7 @@ states = Enum(
 	'RESET REQ_IDENT \
 	WAIT_IDENT_RESP \
 	SET_ADDR \
+	SET_ADDR_RESP \
 	SEND_DATA \
 	ERROR \
 	EXIT'
@@ -92,7 +93,7 @@ class ByteLoader( ):
 			if self.state == states.WAIT_IDENT_RESP:
 				print( 'state[WAIT_IDENT_RESP]' )
 
-				ok = self.__receiveIdentify( )
+				ok = self.__getRequetIdentifyResponse( )
 				if ok is False:
 					print('ERROR: no identification response' )
 					return 2
@@ -114,9 +115,24 @@ class ByteLoader( ):
 
 
 				print( '' )
-				self.state = states.EXIT
+				self.state = states.SET_ADDR_RESP
 				continue
 			# end STATE SET ADDRESS
+
+
+			if self.state == states.SET_ADDR_RESP:
+				print ( 'state[SET_ADDR_RESP]' )
+
+				ok = self.__getSetAddrResponse( )
+				if not ok:
+					print( 'ERROR: could not set address' )
+					return 4
+
+
+				print( '' )
+				self.state = states.EXIT
+				continue
+			# end STATE SET ADDRESS RESPONSE
 
 
 			if self.state == states.EXIT:
@@ -130,6 +146,47 @@ class ByteLoader( ):
 			# end STATE UNKNOWN
 		# end mainLoop
 	# end run()
+
+
+
+	def __receiveMsg( self ):
+		while True:
+			rxMsg = self.canBus.getMsgNonBlocking( )
+
+			if rxMsg == None:
+				sleep( 0.1 )
+				continue # TODO: timeout!
+
+			if rxMsg == False:
+				return False # something went wrong
+
+			if rxMsg.id != self.canId -1:
+				continue # not a bootloader message
+
+			if self.boardId != rxMsg.data[0]:
+				print( '    ERROR: boardId does not match' )
+				print( '    Expected: 0x%02x, Got: 0x%02x' % (self.boardId, rxMsg.data[0]) )
+				return False
+
+			retType = rxMsg.data[1] >> 6
+			retCmd = rxMsg.data[1] & 0x3F
+			msgCnt = rxMsg.data[2]
+			sob = rxMsg.data[3] >> 7
+			fMsgCnt = rxMsg.data[3] & 0x7F
+
+			print( '    data: boardId = 0x%02x' % rxMsg.data[0] )
+			print( '    data: msgType=0x%02x, Command=0x%02x' % (retType, retCmd) )
+			print( '    data: MsgCount =', msgCnt )
+			print( '    data: SoB=%d, FMsgCount=%d' % (sob, fMsgCnt))
+
+			if retType == 0x01:
+				return rxMsg
+			else:
+				print( '    ERROR: response type indicates problem' )
+				return False
+		# end while True
+	# end __receiveMsg()
+
 
 
 
@@ -147,7 +204,6 @@ class ByteLoader( ):
 		print( '    data: msgType = 0x%02x' % (0x00|0x02) )
 		print( '    data: msgNum =', self.msgNumber )
 		print( '    data: SOB=%d, fMsgCount=%d' % (1, 0) )
-		print( '' )
 
 		self.msgNumber = self.msgNumber + 1
 
@@ -161,45 +217,31 @@ class ByteLoader( ):
 
 
 
-	def __receiveIdentify( self ):
+	def __getRequetIdentifyResponse( self ):
 		print( '    > receiving: Identification response' )
 
-		while True:
-			rxMsg = self.canBus.getMsgNonBlocking( )
+		rxMsg = self.__receiveMsg( )
 
-			if rxMsg == None:
-				sleep( 0.1 )
-				continue # TODO: timeout!
+		if rxMsg == False:
+			return False
 
-			if rxMsg.id != self.canId -1:
-				continue # not a bootloader message
+		if rxMsg.data[2] == 0:
+			self.pageSize = 32 # byte
+		elif rxMsg.data[2] == 1:
+			self.pageSize = 64 # byte
+		elif rxMsg.data[2] == 2:
+			self.pageSize = 128 # byte
+		elif rxMsg.data[2] == 3:
+			self.pageSize = 256 # byte
+		else:
+			self.pageSize = 0 # invalid
 
-			if self.boardId != rxMsg.data[0]:
-				print( '    ERROR: boardId does not match' )
-				print( '    Expected: %d, got: %d' % (self.boardId, rxMsg.data[0]))
-				return False
+		self.pageCount = (rxMsg.data[6] << 8) + rxMsg.data[7]
+		print( '    data: pageSize =', self.pageSize )
+		print( '    data: rwwPageCount =', self.pageCount )
 
-			if rxMsg.data[2] == 0:
-				self.pageSize = 32 # byte
-			elif rxMsg.data[2] == 1:
-				self.pageSize = 64 # byte
-			elif rxMsg.data[2] == 2:
-				self.pageSize = 128 # byte
-			elif rxMsg.data[2] == 3:
-				self.pageSize = 256 # byte
-			else:
-				self.pageSize = 0 # invalid
-
-			self.pageCount = (rxMsg.data[6] << 8) + rxMsg.data[7]
-			print( '    data: boardId = 0x%02x' % rxMsg.data[0] )
-			print( '    data: msgType/Command = 0x%02x' % rxMsg.data[1] )
-			print( '    data: bootloaderVersion =', rxMsg.data[4] & 0x0F )
-			print( '    data: pageSize =', self.pageSize )
-			print( '    data: rwwPageCount =', self.pageCount )
-
-			return True
-		# while True
-	# __receiveIdentify()
+		return True
+	# end __getRequetIdentifyResponse()
 
 
 	def __setAddr( self ):
@@ -225,7 +267,6 @@ class ByteLoader( ):
 		print( '    data: SOB=%d, fMsgCount=%d' % (1, 0) )
 		print( '    data: flashPage =', self.flashPage )
 		print( '    data: pageBufferPosition =', self.bufferPosition )
-		print( '' )
 
 		ok = txMsg.send( )
 		if ok == True:
@@ -237,6 +278,16 @@ class ByteLoader( ):
 
 
 
+	def __getSetAddrResponse( self ):
+		print( '    > receiving: Response to SetAddr' )
+
+		rxMsg = self.__receiveMsg( )
+
+		if rxMsg == False:
+			return False
+		else:
+			return True
+	# end __getSetAddrResponse()
 
 
 
