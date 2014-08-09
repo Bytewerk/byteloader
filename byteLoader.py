@@ -17,16 +17,24 @@ if __name__ == "__main__":
 
 states = Enum(
 	'states',
-	'RESET REQ_IDENT \
+	'INIT \
+	REQ_IDENT \
 	WAIT_IDENT_RESP \
 	SET_ADDR \
 	SET_ADDR_RESP \
 	SEND_DATA \
+	SEND_DATA_RESP \
 	ERROR \
 	EXIT'
 )
 
-
+resp = Enum(
+	'resp',
+	'OK \
+	END_OF_PAGE \
+	NOT_END_OF_PAGE \
+	ERROR'
+)
 
 class ByteLoader( ):
 	def __init__( self, canBus ):
@@ -35,7 +43,7 @@ class ByteLoader( ):
 		self.canId = 0x133707FF
 
 		# protocol
-		self.state = states.RESET
+		self.state = states.INIT
 		self.boardId = 0xFF
 		self.msgNumber = 0
 		self.fMsgCounter = 0
@@ -46,15 +54,14 @@ class ByteLoader( ):
 		self.flashPage = 0
 		self.bufferPosition = 0
 		self.fileData = []
+		self.positionInFile = 0
 	# end __init__()
 
 
 	def importHexFile( self, fileName ):
 		with open( fileName, 'rb' ) as f:
-			self.fileData = f.read( )
+			self.fileData = f.read( -1 ) # read entire file
 	# end importHexFile()
-
-
 
 
 
@@ -65,15 +72,17 @@ class ByteLoader( ):
 			sleep( 0.1 ) # seconds
 
 
-			if self.state == states.RESET:
-				print( 'state[RESET]' )
+			if self.state == states.INIT:
+				print( 'state[INIT]' )
 				self.msgNumber = 0
 				self.fMsgCounter = 0
+				print( '    data: msgNum =', self.msgNumber )
+				print( '    data: fMsgNum =', self.fMsgCounter )
 				print( '' )
 
 				self.state = states.REQ_IDENT
 				continue
-			# end STATE RESET
+			# end STATE INIT
 
 
 			elif self.state == states.REQ_IDENT:
@@ -103,7 +112,7 @@ class ByteLoader( ):
 				print( '' )
 				self.state = states.SET_ADDR
 				continue
-			# end STATE RESET
+			# end STATE GET IDENT RESPONSE
 
 			if self.state == states.SET_ADDR:
 				print ( 'state[SET_ADDR]' )
@@ -121,23 +130,55 @@ class ByteLoader( ):
 
 
 			if self.state == states.SET_ADDR_RESP:
-				print ( 'state[SET_ADDR_RESP]' )
+				print( 'state[SET_ADDR_RESP]' )
 
 				ok = self.__getSetAddrResponse( )
 				if not ok:
 					print( 'ERROR: could not set address' )
 					return 4
 
-
 				print( '' )
-				self.state = states.EXIT
+				self.state = states.SEND_DATA
 				continue
 			# end STATE SET ADDRESS RESPONSE
 
 
+			if self.state == states.SEND_DATA:
+				print( 'state[SEND_DATA]' )
+
+				ok = self.__sendPayloadData( )
+				if( ok == resp.ERROR ):
+					print( 'ERROR: could not send data' )
+					return 5
+
+				print( '' )
+				if ( ok == resp.END_OF_PAGE ):
+					self.state = states.SEND_DATA_RESP # ask for correctness of page
+				else:
+					self.state = states.SEND_DATA # send next 4 bytes
+				continue
+			# end STATE SEND DATA
+
+
+			if self.state == states.SEND_DATA_RESP:
+				print( 'state[SEND_DATA_RESP]' )
+
+				ok = self.__getDataResponse( )
+				if not ok:
+					print( 'ERROR: sent data was not ok' )
+					return 6
+
+				print( '' )
+				# send next 4 bytes on next page
+				# page will be autoincremented by bootloader
+				self.state = states.SEND_DATA
+				continue
+			# end STATE GET SEND_DATA RESPONSE
+
+
 			if self.state == states.EXIT:
 				print( 'state[EXIT]' )
-				return False
+				return 0 # all was well
 			# end STATE EXIT
 
 
@@ -152,6 +193,10 @@ class ByteLoader( ):
 	def __receiveMsg( self ):
 		while True:
 			rxMsg = self.canBus.getMsgNonBlocking( )
+
+# !!!!!
+# TODO: This needs a stable way to talk to bootloader on a high traffic bus
+# !!!!!
 
 			if rxMsg == None:
 				sleep( 0.1 )
@@ -181,8 +226,11 @@ class ByteLoader( ):
 
 			if retType == 0x01:
 				return rxMsg
+			elif( retType == 0x03):
+				print( '    ERROR: bootloader expected a different messageNumber' )
+				print( '    It should have been: %d instead of %d' % (msgCnt, self.msgNumber) )
 			else:
-				print( '    ERROR: response type indicates problem' )
+				print( '    ERROR: response type(0x%02x) indicates problem' % retType)
 				return False
 		# end while True
 	# end __receiveMsg()
@@ -208,7 +256,7 @@ class ByteLoader( ):
 		self.msgNumber = self.msgNumber + 1
 
 		ok = txMsg.send( )
-		if ok == True:
+		if ok == False:
 			print( 'ERROR: Cannot send msg' )
 			return False
 		else:
@@ -225,13 +273,13 @@ class ByteLoader( ):
 		if rxMsg == False:
 			return False
 
-		if rxMsg.data[2] == 0:
+		if rxMsg.data[5] == 0:
 			self.pageSize = 32 # byte
-		elif rxMsg.data[2] == 1:
+		elif rxMsg.data[5] == 1:
 			self.pageSize = 64 # byte
-		elif rxMsg.data[2] == 2:
+		elif rxMsg.data[5] == 2:
 			self.pageSize = 128 # byte
-		elif rxMsg.data[2] == 3:
+		elif rxMsg.data[5] == 3:
 			self.pageSize = 256 # byte
 		else:
 			self.pageSize = 0 # invalid
@@ -260,16 +308,17 @@ class ByteLoader( ):
 		data.append( 0x00 )
 		txMsg.setData( data )
 
-		self.msgNumber = self.msgNumber + 1
-
 		print( '    data: boardId = 0x%02x' % self.boardId )
 		print( '    data: msgType = 0x%02x' % (0x00|0x02) )
+		print( '    data: msgNum =', self.msgNumber )
 		print( '    data: SOB=%d, fMsgCount=%d' % (1, 0) )
 		print( '    data: flashPage =', self.flashPage )
 		print( '    data: pageBufferPosition =', self.bufferPosition )
 
+		self.msgNumber = self.msgNumber + 1
+
 		ok = txMsg.send( )
-		if ok == True:
+		if ok == False:
 			print( 'ERROR: Cannot send msg' )
 			return False
 		else:
@@ -290,289 +339,61 @@ class ByteLoader( ):
 	# end __getSetAddrResponse()
 
 
+	def __sendPayloadData( self ):
+		print( '    > sending: payload data for flashing' )
+		txMsg = CanMsg( self.canBus, self.canId, True )
 
-#
-#			if state == states.RESET:
-#				print( 'state: RESET' )
-#				print( '' )
-#				msgCount = 0
-#				dataOffset = 0
-#
-#				state = states.REQ_IDENT
-#				continue
-#			# end RESET
-#
-#			if state == states.REQ_IDENT:
-#				print( 'state: REQUEST IDENTIFIER' )
-#				print( '    msgCount =', msgCount )
-#				print( '    dataOffset =', dataOffset )
-#
-#				s.settimeout( 0.2 ) # cram at least 2 msgs into the bootloader timeout(500ms)
-#				if send_identifyRequest( s, msgCount ) is False:
-#					sys.exit( 1 )
-#					continue
-#
-#				print( '' )
-#				state = states.GET_IDENT
-#				continue
-#			# end REQ_IDENT
-#
-#
+		if( self.fMsgCounter == 0 ):
+			self.fMsgCounter = int(self.pageSize/4)
+			sob = 0x80
+		else:
+			sob = 0x00
 
+		self.fMsgCounter = self.fMsgCounter -1
 
+		data = bytearray( )
+		data.append( self.boardId ) # Board-ID
+		data.append( (0x00|0x03) ) # Type = Request, Command = DATA
+		data.append( self.msgNumber ) # iterates to spot missing messages
+		data.append( (sob|self.fMsgCounter ) )
 
+		data.append( self.fileData[self.positionInFile] )
+		data.append( self.fileData[self.positionInFile+1] )
+		data.append( self.fileData[self.positionInFile+2] )
+		data.append( self.fileData[self.positionInFile+3] )
+		txMsg.setData( data )
 
+		print( '    data: boardId = 0x%02x' % self.boardId )
+		print( '    data: msgType = 0x%02x' % (0x00|0x03) )
+		print( '    data: msgNum =', self.msgNumber )
+		print( '    data: SOB=%d, fMsgCount=%d' % ((sob>>7), self.fMsgCounter ) )
+		print( '    data: [0x%02x][0x%02x][0x%02x][0x%02x]' % (data[4], data[5], data[6], data[7]) )
 
+		self.positionInFile = self.positionInFile +4
+		self.msgNumber = self.msgNumber +1
 
+		# TODO: check where to go next. In case of counte=0 check for response
 
-#			elif state == states.GET_IDENT:
-#				print( 'state: GET IDENTIFIER' )
-#				data = canGetData( s )
-#				if data == None: # Retry the whole thing
-#					print( 'ERROR: got invalid data' )
-#					print( '' )
-#
-#					state = states.RESET
-#					continue
-#
-#				# parse
-#				ident = parse_identifyResponse( data )
-#				if ident == None:
-#					print( 'ERROR: misparsed data' )
-#					print( '' )
-#
-#					state = states.RESET
-#					continue
-#
+		ok = txMsg.send( )
+		if( ok == True ):
+			if( self.fMsgCounter == 0 ):
+				return resp.END_OF_PAGE
+			else:
+				return resp.NOT_END_OF_PAGE
+		else:
+			print( 'ERROR: Cannot send msg' )
+			return resp.ERROR
+	# __sendPayloadData()
 
 
 
+	def __getDataResponse( self ):
+		print( '    > receiving: Response to Data' )
 
+		rxMsg = self.__receiveMsg( )
 
-
-
-
-
-
-
-
-#				print( '    data: bootloader =', ident[0] )
-#				print( '    data: bootloaderVersion =', ident[1] )
-#				print( '    data: pageSize =', ident[2] )
-#				print( '    data: rwwPageCount =', ident[3] )
-#				print( '' )
-#
-#				state = states.SET_ADDR
-#				continue
-#			# end GET IDENT
-#
-#
-#			elif state == states.SET_ADDR: # Send SET_ADDRESS
-#				print( 'state: SET ADDRESS' )
-#				msgCount += 1
-#				send_setAddress( s, ident[2], ident[3], dataOffset, msgCount )
-#				data = canGetData( s )
-#				if data is None:
-#					print( 'ERROR: got invalid data' )
-#					print( '' )
-#
-#					state = states.RESET
-#					continue
-#
-#				ok = parse_ackResponse( data, 0x01, 0x02 ) # Type=Request, Cmd=SET_ADDRESS
-#				fMsgCount = 0
-#				if ok is not True:
-#					print( 'ERROR: got invalid data' )
-#					print( '' )
-#
-#					state = states.RESET
-#					continue
-#
-#				print( 'ok' )
-#				print( '' )
-#				state = states.SEND_DATA
-#			# end SET ADDR
-#
-#
-#
-#			elif state == states.SEND_DATA:
-#				print( 'state: SEND DATA' )
-#				# select the right 4 byte to send in this message
-#				sendData = []
-#				sendData.append( fileData[dataOffset + 0] )
-#				sendData.append( fileData[dataOffset + 1] )
-#				sendData.append( fileData[dataOffset + 2] )
-#				sendData.append( fileData[dataOffset + 3] )
-#				dataOffset += 4
-#
-#				msgCount += 1
-#				#sock, sendData, pageSize, fMsgCnt, msgCount
-#				send_flashData( s, sendData, ident[3], msgCount )
-#
-#				data = canGetData( s )
-#				if data is None:
-#					print( 'ERROR: got invalid data' )
-#					print( '' )
-#
-#					state = states.RESET
-#					continue
-#
-#				ok = parse_ackResponse( data, 0x01, 0x03 ) # Type=Request, Cmd=DATA
-#				if ok is not True:
-#					print( 'ERROR: got invalid data' )
-#					print( '' )
-#
-#					state = states.RESET
-#					continue
-#
-#				print( 'ok' )
-#				state = states.SET_ADDR
-#			# end SEND DATA
-#
-#			else:
-#				print( 'ERROR: UNKNOWN STATE:', state )
-#				print( 'reverting to 0' )
-#				print( '' )
-#
-#				state = states.RESET
-#				continue
-#			# end UNKNOWN STATE
-#		# end of state machine
-#	# files open
-## end main
-
-
-
-#def build_can_frame( can_id, data ):
-#    can_dlc = len( data )
-#    data = data.ljust( 8, b'\x00' )
-#    return struct.pack( can_frame_fmt, can_id, can_dlc, data )
-##build_can_frame()
-#
-#
-#
-#def canGetData( sock ):
-#	sock.settimeout( 10 ) #(seconds) give it more time to respond
-#	try:
-#		data, crap = sock.recvfrom( 1024 )
-#	except socket.timeout:
-#		print( 'ERROR: CAN Timeout' )
-#		return None
-#
-#	canMsg = dissect_can_frame( data )
-#	if canMsg[0] == bootloaderCanId -1: # bootloader responds 1 Id lower
-#		return canMsg[2] # pass on the can data only
-## canGetData()
-#
-#
-#
-#def dissect_can_frame( frame ):
-#    can_id, can_dlc, data = struct.unpack( can_frame_fmt, frame )
-#    return (can_id, can_dlc, data[:can_dlc])
-## dissect_can_frame()
-#
-#
-#
-#def canSendData( sock, msgData ):
-#	sock.settimeout( 2 ) #(seconds) give it more time to respond
-#	try:
-#		sock.send( build_can_frame(bootloaderCanId, msgData) )
-#	except socket.error:
-#		print( 'ERROR: Cannot Send CAN frame' )
-#		exit( 2 )
-#	return 1
-## canSendData()
-
-
-
-
-
-#
-#def parse_identifyResponse( data ):
-#	boardId = data[0]
-#	msgType = data[1] >> 6
-#	command = data[1] & 0x3F
-#
-#	# type=success, cmd=identify, boardId=hardcoded to 0xFF
-#	if msgType != 1 or command != 0x01 or boardId != 0xFF:
-#		print( 'ERROR: Wrong response from device')
-#		print( 'msgType=0x{:02x}, command=0x{:02x}, boardId=0x{:02x}'.format(msgType, command, boardId) )
-#		return None
-#
-#	bootloaderType = data[4] >> 4
-#	bootloaderVersion = data[4] & 0x0F
-#	pageSizeId = data[5]
-#	rwwPageCount = (data[6] << 8) + data[7]
-#
-#	if pageSizeId == 0:
-#		pageSize = 32 # byte
-#	elif pageSizeId == 1:
-#		pageSize = 64 # byte
-#	elif pageSizeId == 2:
-#		pageSize = 128 # byte
-#	elif pageSizeId == 3:
-#		pageSize = 256 # byte
-#	else:
-#		return None
-#
-#	return [bootloaderType, bootloaderVersion, pageSize, rwwPageCount]
-## parse_IdentifyResponse()
-#
-#
-#
-#def parse_ackResponse( data, expType, expCmd ):
-#	msgType = data[1] >> 6
-#	command = data[1] & 0x3F
-#	if expType != msgType or expCmd != command:
-#		print( 'ERROR: Wrong response from device' )
-#		print( 'msgType=0x{:02x}, command=0x{:02x}'.format(msgType, command) )
-#		return False
-#	else:
-#		return True
-## parse_identifyResponse()
-#
-#
-#def send_setAddress( sock, pageSize, pageCount, dataOffset, msgCount):
-#	flashPage = int(math.floor((dataOffset / pageSize)))
-#	pageBufferPosition = int(math.floor((dataOffset - (flashPage * pageSize)) / 4))
-#	print( '    flashPage =', flashPage )
-#	print( '    pageBufferPosition =', pageBufferPosition )
-#	msgData = bytearray( )
-#	msgData.append( 0xFF ) # Board-ID
-#	msgData.append( 0x02 ) # Type = Request, Command = SET_ADDRESS
-#	msgData.append( msgCount ) # Msgcounter
-#	msgData.append( 0x80 ) # SOB = 1, fmsgcounter = 0
-#	msgData.append( flashPage >> 8 ) # bigEndian
-#	msgData.append( flashPage & 0xFF )
-#	msgData.append( pageBufferPosition >> 8 ) # bigEndian
-#	msgData.append( pageBufferPosition & 0xFF )
-#
-#	canSendData( sock, msgData )
-## send_setAddress()
-#
-#
-#
-#def send_flashData( sock, sendData, pageSize, msgCount ):
-#	print( '    flashData = [0x{:02x}][0x{:02x}][0x{:02x}][0x{:02x}]'.format(
-#		sendData[0], sendData[1], sendData[2], sendData[3])
-#	)
-#
-#	if fMsgCount == ((pageSize / 4) -1):
-#		sob=0x80
-#	else:
-#		sob=0x00
-#
-#
-#	# TODO: WHAT ABOUT ENDIANESS ?!
-#	msgData = bytearray( )
-#	msgData.append( 0xFF )      # Board-ID
-#	msgData.append( 0x03 )      # Type = Request, Command = DATA
-#	msgData.append( msgCount )  # global Msgcounter
-#	msgData.append( sob + fMsgCount&0x7F )
-#	msgData.append( sendData[0] )
-#	msgData.append( sendData[1] )
-#	msgData.append( sendData[2] )
-#	msgData.append( sendData[3] )
-#	canSendData( sock, msgData )
-#	print( '' )
-## send_dataRequest()
+		if rxMsg == False:
+			return False
+		else:
+			return True
+	# end __getDataResponse()
