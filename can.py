@@ -19,8 +19,12 @@ class CanBus():
 		self.__can_frame_fmt = "=IB3x8s"
 
 		# create a raw socket and bind it to the given CAN interface
-		self.socket = socket.socket( socket.AF_CAN, socket.SOCK_RAW, socket.CAN_RAW )
-		self.socket.bind( (interface,) )
+		try:
+			self.socket = socket.socket( socket.AF_CAN, socket.SOCK_RAW, socket.CAN_RAW )
+			self.socket.bind( (interface,) )
+		except OSError:
+			print( 'ERROR: OS Error' )
+			exit( 10 )
 	# __init__()
 
 
@@ -31,8 +35,8 @@ class CanBus():
 			self.socket.send( self.__buildFrame( msg.id, msg.extended, msg.data) )
 		except socket.error:
 			print( 'ERROR: Cannot Send CAN frame' )
-			return True
-		return False
+			return False
+		return True
 	# canSendData()
 
 
@@ -55,10 +59,9 @@ class CanBus():
 			print( 'ERROR: Socket timeout' )
 			return None
 
-		except BlockingIOError:
-			print( 'ERROR: Blocking IO Error' )
+		except IOError:
+			print( 'ERROR: IO Error' )
 			return False
-
 
 		disected = self.__dissectFrame(data)
 		msg = CanMsg( self, disected[0], disected[1])
