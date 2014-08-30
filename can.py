@@ -52,7 +52,7 @@ class CanBus():
 
 
 	def getMsgNonBlocking( self ):
-		self.socket.settimeout( 0 )
+		self.socket.settimeout( 1 )
 		try:
 			data, uselessMetaInfo = self.socket.recvfrom( 1024 )
 		except socket.timeout:

@@ -1,13 +1,13 @@
 #!/usr/bin/python3
 # -*- coding: utf-8 -*-
 
+import sys
 from sys import exit
 #import time
 #import math
 from can import CanMsg
 from enum import Enum
 from time import sleep
-
 
 
 if __name__ == "__main__":
@@ -24,6 +24,8 @@ states = Enum(
 	SET_ADDR_RESP \
 	SEND_DATA \
 	SEND_DATA_RESP \
+	SEND_START_APP \
+	GET_START_APP_RESP \
 	ERROR \
 	EXIT'
 )
@@ -70,6 +72,7 @@ class ByteLoader( ):
 		# http://www.kreatives-chaos.com/artikel/can-bootloader
 		while True:
 			sleep( 0.1 ) # seconds
+			#input('enter to continue\n')
 
 
 			if self.state == states.INIT:
@@ -171,10 +174,40 @@ class ByteLoader( ):
 				print( '' )
 				# send next 4 bytes on next page
 				# page will be autoincremented by bootloader
-				self.state = states.SEND_DATA
+				if( (len(self.fileData)-1) < self.positionInFile ):
+					self.state = states.SEND_START_APP # done, now boot it
+				else:
+					self.state = states.SEND_DATA
 				continue
 			# end STATE GET SEND_DATA RESPONSE
 
+
+			if self.state == states.SEND_START_APP:
+				print( 'state[SEND_START_APP]' )
+
+				ok = self.__sendStartApp( )
+				if not ok:
+					print( 'ERROR: sent data was not ok' )
+					return 6
+
+				print( '' )
+				self.state = states.GET_START_APP_RESP
+				continue
+			# end STATE SEND START_APP MESSAGE
+
+			if self.state == states.GET_START_APP_RESP:
+				print( 'state[GET_START_APP_RESP]' )
+
+				ok = self.__getStartAppResp( )
+				if not ok:
+					print( 'ERROR: sent data was not ok' )
+					return 6
+
+				print( '' )
+				return 0
+				continue
+			# end STATE GET START_APP RESPONSE
+			
 
 			if self.state == states.EXIT:
 				print( 'state[EXIT]' )
@@ -348,19 +381,39 @@ class ByteLoader( ):
 			sob = 0x80
 		else:
 			sob = 0x00
-
 		self.fMsgCounter = self.fMsgCounter -1
-
+		
 		data = bytearray( )
 		data.append( self.boardId ) # Board-ID
 		data.append( (0x00|0x03) ) # Type = Request, Command = DATA
 		data.append( self.msgNumber ) # iterates to spot missing messages
 		data.append( (sob|self.fMsgCounter ) )
 
-		data.append( self.fileData[self.positionInFile] )
-		data.append( self.fileData[self.positionInFile+1] )
-		data.append( self.fileData[self.positionInFile+2] )
-		data.append( self.fileData[self.positionInFile+3] )
+
+		if( (len(self.fileData)-1) < self.positionInFile ):
+			data.append( 0xFF )
+		else:
+			data.append( self.fileData[self.positionInFile] )
+			self.positionInFile += 1
+
+		if( (len(self.fileData)-1) < self.positionInFile ):
+			data.append( 0xFF )
+		else:
+			data.append( self.fileData[self.positionInFile] )
+			self.positionInFile += 1
+
+		if( (len(self.fileData)-1) < self.positionInFile ):
+			data.append( 0xFF )
+		else:
+			data.append( self.fileData[self.positionInFile] )
+			self.positionInFile += 1
+
+		if( (len(self.fileData)-1) < self.positionInFile ):
+			data.append( 0xFF )
+		else:
+			data.append( self.fileData[self.positionInFile] )
+			self.positionInFile += 1
+
 		txMsg.setData( data )
 
 		print( '    data: boardId = 0x%02x' % self.boardId )
@@ -372,7 +425,12 @@ class ByteLoader( ):
 		self.positionInFile = self.positionInFile +4
 		self.msgNumber = self.msgNumber +1
 
+		# manually make the counter wrap
+		if self.msgNumber > 255:
+			self.msgNumber = 0
+
 		# TODO: check where to go next. In case of counte=0 check for response
+
 
 		ok = txMsg.send( )
 		if( ok == True ):
@@ -392,8 +450,41 @@ class ByteLoader( ):
 
 		rxMsg = self.__receiveMsg( )
 
+
 		if rxMsg == False:
 			return False
 		else:
 			return True
 	# end __getDataResponse()
+
+
+
+	def __sendStartApp( self ):
+		print( '    > sending: command to start application' )
+
+		txMsg = CanMsg( self.canBus, self.canId, True )
+
+		sob = 0x80
+		self.fMsgCounter = self.fMsgCounter -1
+		
+		data = bytearray( )
+		data.append( self.boardId ) # Board-ID
+		data.append( (0x00|0x04) ) # Type = Request, Command = START_APP
+		data.append( self.msgNumber ) # iterates to spot missing messages
+		data.append( (sob|self.fMsgCounter ) )
+
+		return True
+	# end __sendStartApp()
+
+
+
+	def __getStartAppResp( self ):
+		print( '    > receiving: Response to Data' )
+
+		rxMsg = self.__receiveMsg( )
+
+		if rxMsg == False:
+			return False
+		else:
+			return True
+	# end __getStartAppResp()
