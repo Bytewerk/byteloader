@@ -60,10 +60,12 @@ class ByteLoader( ):
 	# end __init__()
 
 
-	def importHexFile( self, fileName ):
+	def importBinFile( self, fileName ):
 		with open( fileName, 'rb' ) as f:
-			self.fileData = f.read( -1 ) # read entire file
-	# end importHexFile()
+			data = f.read( -1 ) # read entire file
+			# swap high-low bytes every 2 bytes
+			self.fileData = bytes([c for t in zip(data[1::2], data[::2]) for c in t])
+	# end importBinFile()
 
 
 
@@ -71,11 +73,14 @@ class ByteLoader( ):
 		# protocol description see
 		# http://www.kreatives-chaos.com/artikel/can-bootloader
 		while True:
-			sleep( 0.1 ) # seconds
+			sleep( 0.01 ) # seconds
 			#input('enter to continue\n')
 
 
 			if self.state == states.INIT:
+				print( '' )
+				print( '' )
+				print( '' )
 				print( 'state[INIT]' )
 				self.msgNumber = 0
 				self.fMsgCounter = 0
@@ -105,10 +110,12 @@ class ByteLoader( ):
 			if self.state == states.WAIT_IDENT_RESP:
 				print( 'state[WAIT_IDENT_RESP]' )
 
-				ok = self.__getRequetIdentifyResponse( )
+				ok = self.__getRequestIdentifyResponse( )
 				if ok is False:
 					print('ERROR: no identification response' )
-					return 2
+					self.state = states.INIT
+					continue
+					#return 2
 
 				# waiting here might take a while.
 				# The device might not be powered already
@@ -224,6 +231,7 @@ class ByteLoader( ):
 
 
 	def __receiveMsg( self ):
+		retryCount = 1
 		while True:
 			rxMsg = self.canBus.getMsgNonBlocking( )
 
@@ -232,7 +240,10 @@ class ByteLoader( ):
 # !!!!!
 
 			if rxMsg == None:
+				retryCount -= 1
 				sleep( 0.1 )
+				if retryCount < 0:
+					return False
 				continue # TODO: timeout!
 
 			if rxMsg == False:
@@ -298,8 +309,8 @@ class ByteLoader( ):
 
 
 
-	def __getRequetIdentifyResponse( self ):
-		print( '    > receiving: Identification response' )
+	def __getRequestIdentifyResponse( self ):
+		print( '    > waiting for: Identification response' )
 
 		rxMsg = self.__receiveMsg( )
 
@@ -322,7 +333,7 @@ class ByteLoader( ):
 		print( '    data: rwwPageCount =', self.pageCount )
 
 		return True
-	# end __getRequetIdentifyResponse()
+	# end __getRequestIdentifyResponse()
 
 
 	def __setAddr( self ):
@@ -421,8 +432,9 @@ class ByteLoader( ):
 		print( '    data: msgNum =', self.msgNumber )
 		print( '    data: SOB=%d, fMsgCount=%d' % ((sob>>7), self.fMsgCounter ) )
 		print( '    data: [0x%02x][0x%02x][0x%02x][0x%02x]' % (data[4], data[5], data[6], data[7]) )
+		print( '    data: dataLeft =', len(self.fileData) - self.positionInFile )
 
-		self.positionInFile = self.positionInFile +4
+		#self.positionInFile = self.positionInFile +4
 		self.msgNumber = self.msgNumber +1
 
 		# manually make the counter wrap
@@ -465,7 +477,7 @@ class ByteLoader( ):
 		txMsg = CanMsg( self.canBus, self.canId, True )
 
 		sob = 0x80
-		self.fMsgCounter = self.fMsgCounter -1
+		self.fMsgCounter = 0
 		
 		data = bytearray( )
 		data.append( self.boardId ) # Board-ID
@@ -473,7 +485,14 @@ class ByteLoader( ):
 		data.append( self.msgNumber ) # iterates to spot missing messages
 		data.append( (sob|self.fMsgCounter ) )
 
-		return True
+		txMsg.setData( data )
+
+		ok = txMsg.send( )
+		if( ok == True ):
+			return True
+		else:
+			print( 'ERROR: Cannot send msg' )
+			return resp.ERROR
 	# end __sendStartApp()
 
 

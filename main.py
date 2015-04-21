@@ -21,7 +21,7 @@ def main( ):
 	canBus = CanBus( interface )
 
 	bl = ByteLoader( canBus )
-	bl.importHexFile( hexfile )
+	bl.importBinFile( hexfile )
 	rc = bl.run( )
 
 	if rc:
