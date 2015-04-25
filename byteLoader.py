@@ -62,9 +62,7 @@ class ByteLoader( ):
 
 	def importBinFile( self, fileName ):
 		with open( fileName, 'rb' ) as f:
-			data = f.read( -1 ) # read entire file
-			# swap high-low bytes every 2 bytes
-			self.fileData = bytes([c for t in zip(data[1::2], data[::2]) for c in t])
+			self.fileData = bytes(f.read( -1 )) # read entire file
 	# end importBinFile()
 
 
@@ -73,7 +71,7 @@ class ByteLoader( ):
 		# protocol description see
 		# http://www.kreatives-chaos.com/artikel/can-bootloader
 		while True:
-			sleep( 0.01 ) # seconds
+			#sleep( 0.01 ) # seconds
 			#input('enter to continue\n')
 
 
@@ -231,7 +229,7 @@ class ByteLoader( ):
 
 
 	def __receiveMsg( self ):
-		retryCount = 1
+		retryCount = 0
 		while True:
 			rxMsg = self.canBus.getMsgNonBlocking( )
 
