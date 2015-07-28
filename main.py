@@ -12,7 +12,7 @@ from can import CanBus
 def main( ):
 	if len( sys.argv ) != 3:
 		print( 'Provide CAN device name as interface(e.g. can0)' )
-		print( sys.argv[0], '<interface> <hexfile>' )
+		print( sys.argv[0], '<interface> <binfile>' )
 		sys.exit( 0 )
 
 	interface = sys.argv[1]
