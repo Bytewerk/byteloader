@@ -11,3 +11,4 @@ http://www.kreatives-chaos.com/artikel/can-bootloader
 **todo**
 * support for bootloader IDs
 * support for other CAN Ids that those used by bytewerk
+* test everything properly
